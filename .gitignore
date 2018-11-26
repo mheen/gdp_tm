@@ -1,0 +1,10 @@
+*.asv
+*.mat
+*.json
+*.ini
+*.pdf
+*.png
+*.eps
+*.jpg
+
+*/output/
