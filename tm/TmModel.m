@@ -385,11 +385,11 @@ classdef TmModel < handle
         end
         
         function tracer_3d = convert_2d_to_3d(tracer_2d,grid)
-            % Converts 2d simulation result [loc,time] to 3d [lat,lon,time]
+            % Converts 2d simulation result [time,loc] to 3d [lat,lon,time]
             % (static method).
             %
             % Input arguments:
-            % - tracer_2d [loc,time]: matrix containing tracer concentration
+            % - tracer_2d [time,loc]: matrix containing tracer concentration
             % - grid: GlobalGrid object
             %
             % Output:
