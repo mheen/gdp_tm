@@ -56,7 +56,11 @@ classdef TransportMatrix < handle
                     obj.config = config;
                     obj.grid = GlobalGrid(obj.config.dx);
                     % construct tm
-                    obj.get_tm(gdp_data)
+                    if strcmpi(obj.config.specify_time.type,'all')
+                        obj.get_tm(gdp_data)
+                    else
+                        obj.get_tm_specific_times(gdp_data)
+                    end
                     obj.handle_sinks()
                     obj.get_normalised_tm()
                     obj.save()
@@ -158,6 +162,72 @@ classdef TransportMatrix < handle
             obj.info.sinks.lat = obj.grid.lat(sink_i);
         end
         
+        function get_tm_specific_times(obj,gdp_data)
+            % Creates a transport matrix T from gdp_data for specific
+            % months or years. For each drifter, observed locations at a
+            % time t that falls in the specified months or years and at a
+            % time t+dt are noted. The grid cell that a drifter is in at t
+            % is added to the corresponding column of T, the grid cell a
+            % drifter is in at a time t+dt is added to the corresponding
+            % row in T.
+            %
+            obj.check_gdp_data(gdp_data);
+            
+            grid_index_t0 = [];
+            grid_index_t0dt = [];
+            time_locations = [];
+            n_drifters = 0;
+            
+            drifter_ids = fieldnames(gdp_data);
+            for i = 1:length(drifter_ids)
+                if ~isempty(gdp_data.(drifter_ids{i}).(obj.config.drogued_status))
+                    drifter_time = gdp_data.(drifter_ids{i}).(obj.config.drogued_status)(:,1);
+                    separation = obj.config.dt*4; % because drifter measurements are returned every 6 hours (4 times a day)
+                    if strcmpi(obj.config.specify_time.type,'month')
+                        times = str2num(obj.config.specify_time.times);
+                        l_times = ismember(month(drifter_time),times);
+                    elseif strcmpi(obj.config.specify_time.type,'year')
+                        times = str2num(obj.config.specify_time.times);
+                        l_times = ismember(year(drifter_time),times);
+                    else
+                        error('Unknown type of specify_time requested. Valid options are: "all", "month", "year".')
+                    end
+                    if any(l_times)
+                        % get time indices of locations
+                        time_index_t0 = find(l_times);
+                        time_index_t0dt = time_index_t0+separation;
+                        i_inrange = find(time_index_t0dt<=length(drifter_time)); % keep only times where t0+dt is in range of drifter measurement
+                        if any(i_inrange)
+                            n_drifters = n_drifters+1;
+                            time_index_t0 = time_index_t0(i_inrange);
+                            time_index_t0dt = time_index_t0dt(i_inrange);
+                            % get lat and lon of locations
+                            lon_t0 = gdp_data.(drifter_ids{i}).(obj.config.drogued_status)(time_index_t0,3);
+                            lat_t0 = gdp_data.(drifter_ids{i}).(obj.config.drogued_status)(time_index_t0,2);
+                            lon_t0dt = gdp_data.(drifter_ids{i}).(obj.config.drogued_status)(time_index_t0dt,3);
+                            lat_t0dt = gdp_data.(drifter_ids{i}).(obj.config.drogued_status)(time_index_t0dt,2);
+                            % get lat and lon indexes of locations
+                            l_no_nan = ~isnan(lon_t0) & ~isnan(lat_t0) & ~isnan(lon_t0dt) & ~isnan(lat_t0dt);
+                            [lon_index_t0,lat_index_t0] = obj.grid.get_index(lon_t0(l_no_nan),lat_t0(l_no_nan));
+                            [lon_index_t0dt,lat_index_t0dt] = obj.grid.get_index(lon_t0dt(l_no_nan),lat_t0dt(l_no_nan));
+                            % get grid index of locations
+                            grid_index_t0_append = sub2ind([obj.grid.lon_size,obj.grid.lat_size],lon_index_t0,lat_index_t0);
+                            grid_index_t0dt_append = sub2ind([obj.grid.lon_size,obj.grid.lat_size],lon_index_t0dt,lat_index_t0dt);
+                            grid_index_t0 = [grid_index_t0;grid_index_t0_append];
+                            grid_index_t0dt = [grid_index_t0dt;grid_index_t0dt_append];
+                            % get time of drifter locations (for info)
+                            time_locations_append = gdp_data.(drifter_ids{i}).(obj.config.drogued_status)(time_index_t0dt(l_no_nan),1);
+                            time_locations = [time_locations;time_locations_append];
+                        end
+                    end
+                end
+            end
+            locations = ones(length(grid_index_t0dt),1);
+            obj.tm = sparse(grid_index_t0dt,grid_index_t0,locations,obj.grid.lon_size*obj.grid.lat_size,obj.grid.lon_size*obj.grid.lat_size);
+            
+            obj.get_info(n_drifters,time_locations);            
+        end
+        
         function get_tm(obj,gdp_data)
             % Creates a transport matrix T from gdp_data. For each drifter,
             % observed locations at a time t and a time t+dt are noted. The
@@ -183,7 +253,7 @@ classdef TransportMatrix < handle
             for i = 1:length(drifter_ids)
                 if ~isempty(gdp_data.(drifter_ids{i}).(obj.config.drogued_status))
                     n_drifters = n_drifters+1;
-                    % get time indexes of locations
+                    % get time indices of locations
                     separation = obj.config.dt*4; % because drifter measurements are returned every 6 hours (4 times a day)
                     time_index_t0 = [1:length(gdp_data.(drifter_ids{i}).(obj.config.drogued_status)(:,1))];
                     time_index_t0dt = time_index_t0+separation;
@@ -271,9 +341,21 @@ classdef TransportMatrix < handle
             dx_description = ['_dx',strrep(num2str(config.dx),'.','')];
             dt_description = ['_dt',num2str(config.dt)];
             sink_description = ['_s',num2str(config.sinks)];
+            if strcmpi(config.specify_time.type,'all')
+                time_description = '';
+            elseif strcmpi(config.specify_time.type,'month') || strcmpi(config.specify_time.type,'year')
+                times = str2num(config.specify_time.times);
+                times_str = num2str(times(1));
+                for t = 2:length(times)
+                    times_str = [times_str,'-',num2str(times(t))];
+                end
+                time_description = ['_',config.specify_time.type(1),times_str];
+            else
+                error('Unknown specify_time type requested. Valid options are: "all", "month", "year".')
+            end
             
             run_dir = fileparts(mfilename('fullpath'));
-            tm_dir = [run_dir,'/output/',config.drogued_status,dx_description,dt_description,sink_description,'/'];
+            tm_dir = [run_dir,'/output/',config.drogued_status,dx_description,dt_description,sink_description,time_description,'/'];
             tm_file = 'tm.mat';
         end
         

@@ -10,6 +10,7 @@ classdef ModelConfiguration < handle
         normalise
         initial
         days_in_year
+        specify_time
     end
     
     methods        
@@ -104,6 +105,10 @@ classdef ModelConfiguration < handle
                     obj.initial.years_to_add_sources = varargin{1}{n+1};
                 elseif strcmpi(varargin{1}{n},'days_in_year')
                     obj.days_in_year = varargin{1}{n+1};
+                elseif strcmpi(varargin{1}{n},'specify_time.type')
+                    obj.specify_time.type = varargin{1}{n+1};
+                elseif strcmpi(varargin{1}{n},'specify_time.times')
+                    obj.specify_time.times = varargin{1}{n+1};
                 end
             end            
         end
@@ -124,7 +129,9 @@ classdef ModelConfiguration < handle
             obj.initial.lat = [];
             obj.initial.tracer_per_grid_cell = 1;
             obj.initial.years_to_add_sources = [];            
-            obj.days_in_year = 360; % this needs to be a multiple of dt            
+            obj.days_in_year = 360; % this needs to be a multiple of dt
+            obj.specify_time.type = 'all';
+            obj.specify_time.times = [];
         end
         
         function check_normalisation(obj)
@@ -163,6 +170,8 @@ classdef ModelConfiguration < handle
             config.AddKeys(obj.description,'initial.tracer_per_grid_cell',obj.initial.tracer_per_grid_cell);
             config.AddKeys(obj.description,'initial.years_to_add_sources',obj.initial.years_to_add_sources);
             config.AddKeys(obj.description,'days_in_year',obj.days_in_year);
+            config.AddKeys(obj.description,'specify_time.type',obj.specify_time.type);
+            config.AddKeys(obj.description,'specify_time.times',obj.specify_time.times);
             config.WriteFile(output_path);          
         end                
     end    

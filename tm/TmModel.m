@@ -74,8 +74,8 @@ classdef TmModel < handle
             % Creates a uniform initial condition, where tracer is spread
             % evenly between a specified longitude and latitude range.
             %
-            lon1d = str2double(obj.config.initial.lon);
-            lat1d = str2double(obj.config.initial.lat);
+            lon1d = str2num(obj.config.initial.lon);
+            lat1d = str2num(obj.config.initial.lat);
             lon2d = repmat(lon1d,length(lat1d),1);
             lat2d = repmat(lat1d,length(lon1d),1)';
             lon = lon2d(:);
