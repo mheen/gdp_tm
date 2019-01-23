@@ -120,7 +120,7 @@ classdef ModelConfiguration < handle
             obj.drogued_status = 'all'; % 'all', 'drogued' or 'undrogued'
             obj.dx = 1; % degrees
             obj.dt = 60; % days            
-            obj.run_time = 10; % years
+            obj.run_time = 50; % years
             obj.output_interval = 1;
             obj.sinks = 0;
             obj.normalise = 0;

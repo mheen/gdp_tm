@@ -2,10 +2,11 @@ classdef TmModel < handle
     properties
         config % ModelConfiguration object
         initial % initial condition
-        grid % GlobalGrid object containing information on transport matrix grid        
+        grid % GlobalGrid object containing information on transport matrix grid
         tm % TransportMatrix object
         tracer % simulated tracer concentration
-        time % [days] simulation time        
+        time % [days] simulation time
+        n_iterations_per_tm % number of iterations for which a single tm is used during simulation when running with multiple tms
     end
     
     methods
@@ -28,18 +29,28 @@ classdef TmModel < handle
             %
             try
                 simulation = obj.load(config);
-                obj.config = simulation.config;                
+                obj.config = simulation.config;
                 obj.grid = simulation.grid;
                 obj.tracer = simulation.tracer;
-                obj.time = simulation.time;                
+                obj.time = simulation.time;
             catch ME
                 if(strcmp(ME.identifier,'TmModel:fileNotFound'))
                     obj.config = config;
+                    obj.grid = GlobalGrid(obj.config.dx);
                     obj.tm = tm;
-                    obj.grid = GlobalGrid(obj.config.dx);            
-                    % simulation
                     obj.get_initial_condition()
-                    obj.run()                        
+                    if length(tm) == 1
+                        % run simulation with single tm
+                        obj.run()
+                    elseif length(tm) > 1
+                        % run simulation with multiple tms
+                        if strcmpi(varargin{1},'n_iterations_per_tm')
+                            obj.n_iterations_per_tm = varargin{2};
+                        else
+                            error('Argument n_iterations_per_tm not specified.')
+                        end
+                        obj.run_with_multiple_tms()
+                    end
                     % save simulation and config.ini
                     obj.save()
                     [simulation_dir,~] = obj.get_path(config);
@@ -67,7 +78,12 @@ classdef TmModel < handle
             % spread evenly over the global oceans.
             %
             obj.initial = obj.config.initial.tracer_per_grid_cell*ones(1,obj.grid.lon_size*obj.grid.lat_size);
-            obj.initial(obj.tm.info.undefined.index) = 0;
+            % remove undefined locations from initial condition
+            if length(obj.tm) == 1
+                obj.initial(obj.tm.info.undefined.index) = 0;
+            elseif length(obj.tm) > 1
+                obj.initial(obj.tm{1}.info.undefined.index) = 0;
+            end
         end
         
         function get_uniform_range(obj)
@@ -80,15 +96,20 @@ classdef TmModel < handle
             lat2d = repmat(lat1d,length(lon1d),1)';
             lon = lon2d(:);
             lat = lat2d(:);
-                        
+            
             [index_lon,index_lat] = obj.grid.get_index(lon,lat);
             index = sub2ind([obj.grid.lon_size,obj.grid.lat_size],index_lon,index_lat);
             
             obj.initial = zeros(1,obj.grid.lon_size*obj.grid.lat_size);
             obj.initial(index) = 1*obj.config.initial.tracer_per_grid_cell;
-            obj.initial(obj.tm.info.undefined.index) = 0;
+            % remove undefined locations from initial condition
+            if length(obj.tm) == 1
+                obj.initial(obj.tm.info.undefined.index) = 0;
+            elseif length(obj.tm) > 1
+                obj.initial(obj.tm{1}.info.undefined.index) = 0;
+            end
         end
-                
+        
         function run(obj)
             % Runs the simulation.
             %
@@ -117,6 +138,54 @@ classdef TmModel < handle
                 old_state = new_state;
             end
             obj.tracer = obj.convert_2d_to_3d(tracer_2d,obj.grid);
+            
+            if obj.config.normalise
+                obj.normalise_tracer()
+            end
+        end
+        
+        function run_with_multiple_tms(obj)
+           % Runs a simulation with multiple transport matrices, iterating
+           % between them as specified by n_iterations_per_tm.
+           %
+           if ~isprop(obj,'n_iterations_per_tm')
+               error('Cannot run with multiple tms: n_iterations_per_tm not specified.')
+           end
+           n_iterations = obj.get_iterations(obj.config.run_time);
+           n_total_output = floor((n_iterations-1)/obj.config.output-interval)+1;
+           % initialise matrices
+           obj.time = nan(n_total_output,1);
+           obj.time(1) = 0;
+           tracer_2d = nan(n_total_output,size(obj.tm{1}.tmn,2));
+           tracer_2d(1,:) = obj.initial;
+           old_state = obj.initial';
+           n_output = 2;
+           n_source_iterations = obj.add_sources_during_simulation();
+           j = 0;
+           n = 1;
+           n_tms = length(obj.tm);
+           % run
+           for i = 2:n_iterations
+               if 2<i && i<=n_source_iterations
+                  old_state = old_state+obj.initial';
+               end
+               if j == obj.n_iterations_per_tm % reset j and move to next tm
+                   j = 0;
+                   n = n+1;
+                   if n > n_tms
+                       n = 1; % reset n (start again with first tm)
+                   end
+               end
+               new_state =obj.tm{n}.tmn*old_state;
+               j = j+1;
+               if mod(i-1,obj.config.output_interval) == 0
+                    tracer_2d(n_output,:) = new_state;
+                    obj.time(n_output) = (i-1)*obj.config.dt;
+                    n_output = n_output+1;
+                end
+                old_state = new_state;
+           end
+           obj.tracer = obj.convert_2d_to_3d(tracer_2d,obj.grid);
             
             if obj.config.normalise
                 obj.normalise_tracer()
@@ -179,84 +248,84 @@ classdef TmModel < handle
                 n_model_iterations = run_time_days/obj.config.dt+1;
             end
         end
-                       
+        
         function defined_sources = move_source_locations(obj,sources)
-           % Checks if source locations are located at an undefined
-           % location in the transport matrix. If they are, checks if there
-           % is a defined location available within 1 grid cell. If so,
-           % moves the source location to that defined grid cell.
-           %
-           defined_sources = sources;
-           i_source = find(sources~=0);
-           for i = 1:length(i_source)
-               if ~isempty(find(i_source(i)==obj.undefined.index,1))
-                   % k is the index of a grid cell that has a source, but is
-                   % undefined in the transport matrix
-                   k = i_source(i);
-                   % indexes of direct neighbours of k
-                   i_above = k-1;                   
-                   i_below = k+1;                   
-                   i_left = k+obj.grid.lat_size;                   
-                   i_right = k-obj.grid.lat_size;
-                   k_neighbours = [i_above,i_below,i_left,i_right];                   
-                   % check if direct neighbours of k are defined or not
-                   def_above = isempty(find(i_above==obj.undefined.index,1));
-                   def_below = isempty(find(i_below==obj.undefined.index,1));
-                   def_left = isempty(find(i_left==obj.undefined.index,1));
-                   def_right = isempty(find(i_right==obj.undefined.index,1));
-                   def_k_neighbours = [def_above,def_below,def_left,def_right];
-                   % determine how to move k
-                   if ~def_above && def_below && def_left && def_right
-                       % assume coastline is above, move k below
-                       defined_sources(k) = 0;
-                       defined_sources(i_below) = sources(k);
-                   elseif ~def_below && def_above && def_left && def_right
-                       % assume coastline is below, move k above
-                       defined_sources(k) = 0;
-                       defined_sources(i_above) = sources(k);
-                   elseif ~def_left && def_above && def_below && def_right
-                       % assume coastline is left, move k right
-                       defined_sources(k) = 0;
-                       defined_sources(i_right) = sources(k);
-                   elseif ~def_right && def_above && def_below && def_left
-                       % assume coastline is right, move k left
-                       defined_sources(k) = 0;
-                       defined_sources(i_left) = sources(k);
-                   elseif sum(def_k_neighbours)==1
-                       % move k to only defined direct neighbour
-                       def_nb = find(def_k_neighbours);
-                       defined_sources(k) = 0;
-                       defined_sources(k_neighbours(def_nb)) = sources(k);
-                   elseif sum(def_k_neighbours)==2 || sum(def_k_neighbours)==4
-                       % determine direct neighbours with max number of
-                       % defined neighbours, if equal choose randomly
-                       def_nbs = find(def_k_neighbours);
-                       n_def_next_neighbours = zeros(1,length(def_nbs));
-                       for j = 1:length(def_nbs)
-                          m = k_neighbours(def_nbs(j)); % defined direct neighbour of k
-                          next_neighbours = [m-1,m+1,...
-                              m-obj.grid.lat_size,m-obj.grid.lat_size-1,m-obj.grid.lat_size+1,...
-                              m+obj.grid.lat_size,m+obj.grid.lat_size-1,m+obj.grid.lat_size+1];
-                          n_def = 0;
-                          for l = 1:length(next_neighbours)
-                              if isempty(find(next_neighbours(l)==obj.undefined.index,1))
-                                  n_def = n_def+1;
-                              end
-                          end
-                          n_def_next_neighbours(j) = n_def;
-                       end
-                       j_max = find(n_def_next_neighbours==max(n_def_next_neighbours));
-                       if length(j_max)==1
-                           k_new = k_neighbours(def_nbs(j_max));
-                       else
-                           j_random = j_max(randi(length(j_max)));
-                           k_new = k_neighbours(def_nbs(j_random));
-                       end
-                       defined_sources(k) = 0;
-                       defined_sources(k_new) = sources(k);
-                   end                   
-               end                   
-           end
+            % Checks if source locations are located at an undefined
+            % location in the transport matrix. If they are, checks if there
+            % is a defined location available within 1 grid cell. If so,
+            % moves the source location to that defined grid cell.
+            %
+            defined_sources = sources;
+            i_source = find(sources~=0);
+            for i = 1:length(i_source)
+                if ~isempty(find(i_source(i)==obj.undefined.index,1))
+                    % k is the index of a grid cell that has a source, but is
+                    % undefined in the transport matrix
+                    k = i_source(i);
+                    % indexes of direct neighbours of k
+                    i_above = k-1;
+                    i_below = k+1;
+                    i_left = k+obj.grid.lat_size;
+                    i_right = k-obj.grid.lat_size;
+                    k_neighbours = [i_above,i_below,i_left,i_right];
+                    % check if direct neighbours of k are defined or not
+                    def_above = isempty(find(i_above==obj.undefined.index,1));
+                    def_below = isempty(find(i_below==obj.undefined.index,1));
+                    def_left = isempty(find(i_left==obj.undefined.index,1));
+                    def_right = isempty(find(i_right==obj.undefined.index,1));
+                    def_k_neighbours = [def_above,def_below,def_left,def_right];
+                    % determine how to move k
+                    if ~def_above && def_below && def_left && def_right
+                        % assume coastline is above, move k below
+                        defined_sources(k) = 0;
+                        defined_sources(i_below) = sources(k);
+                    elseif ~def_below && def_above && def_left && def_right
+                        % assume coastline is below, move k above
+                        defined_sources(k) = 0;
+                        defined_sources(i_above) = sources(k);
+                    elseif ~def_left && def_above && def_below && def_right
+                        % assume coastline is left, move k right
+                        defined_sources(k) = 0;
+                        defined_sources(i_right) = sources(k);
+                    elseif ~def_right && def_above && def_below && def_left
+                        % assume coastline is right, move k left
+                        defined_sources(k) = 0;
+                        defined_sources(i_left) = sources(k);
+                    elseif sum(def_k_neighbours)==1
+                        % move k to only defined direct neighbour
+                        def_nb = find(def_k_neighbours);
+                        defined_sources(k) = 0;
+                        defined_sources(k_neighbours(def_nb)) = sources(k);
+                    elseif sum(def_k_neighbours)==2 || sum(def_k_neighbours)==4
+                        % determine direct neighbours with max number of
+                        % defined neighbours, if equal choose randomly
+                        def_nbs = find(def_k_neighbours);
+                        n_def_next_neighbours = zeros(1,length(def_nbs));
+                        for j = 1:length(def_nbs)
+                            m = k_neighbours(def_nbs(j)); % defined direct neighbour of k
+                            next_neighbours = [m-1,m+1,...
+                                m-obj.grid.lat_size,m-obj.grid.lat_size-1,m-obj.grid.lat_size+1,...
+                                m+obj.grid.lat_size,m+obj.grid.lat_size-1,m+obj.grid.lat_size+1];
+                            n_def = 0;
+                            for l = 1:length(next_neighbours)
+                                if isempty(find(next_neighbours(l)==obj.undefined.index,1))
+                                    n_def = n_def+1;
+                                end
+                            end
+                            n_def_next_neighbours(j) = n_def;
+                        end
+                        j_max = find(n_def_next_neighbours==max(n_def_next_neighbours));
+                        if length(j_max)==1
+                            k_new = k_neighbours(def_nbs(j_max));
+                        else
+                            j_random = j_max(randi(length(j_max)));
+                            k_new = k_neighbours(def_nbs(j_random));
+                        end
+                        defined_sources(k) = 0;
+                        defined_sources(k_new) = sources(k);
+                    end
+                end
+            end
         end
         
         function save(obj)
@@ -279,7 +348,7 @@ classdef TmModel < handle
             save(simulation_path,'simulation','-v7.3');
         end
     end
-       
+    
     methods(Static)
         function simulation = load(config)
             % Loads existing simulation from a .mat file (static method).
@@ -338,7 +407,7 @@ classdef TmModel < handle
                 error('Unknown initial_type.');
             end
             run_time_description = ['rt',num2str(config.run_time)];
-            output_interval_description = ['_oi',num2str(config.output_interval)];            
+            output_interval_description = ['_oi',num2str(config.output_interval)];
             simulation_dir = [tm_dir,run_time_description,output_interval_description,initial_description,'/'];
             simulation_file = 'sim.mat';
         end
@@ -379,8 +448,8 @@ classdef TmModel < handle
             %
             % Output:
             % - tracer_2d [lat,lon]: 2d matrix containing tracer
-            %   concentration, dimensions match grid.lon and grid.lat            
-            %            
+            %   concentration, dimensions match grid.lon and grid.lat
+            %
             tracer_2d(:,:) = vec2mat(tracer_1d,grid.lon_size);
         end
         
