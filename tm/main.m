@@ -33,4 +33,4 @@ accumulation = AccumulationRegions(simulation,config,tracer_threshold,area_thres
 plot_year = 10;
 plot_tm_simulation(config,plot_year,1);
 
-plot_temporal_accumulations(config,tracer_threshold,area_threshold);
+figure; plot_temporal_accumulations(config,tracer_threshold,area_threshold);

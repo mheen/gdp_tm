@@ -289,6 +289,8 @@ classdef TransportMatrix < handle
             % Gets some information on the construction of the transport
             % matrix T, to store in "info".
             %
+            
+            % brief information
             obj.info.n_drifters = n_drifters;
             obj.info.n_locations = length(time_locations);
             month_locations = month(time_locations);
@@ -299,6 +301,11 @@ classdef TransportMatrix < handle
             unique_years = unique(year_locations,'sorted');
             obj.info.years = unique_years;
             obj.info.n_years = histc(year_locations,unique_years);
+            % complete number of locations per month for each year            
+            min_year = min(year_locations);
+            i_year_locations = year_locations-min_year+1;
+            subs = [month_locations,i_year_locations];
+            obj.info.n_times = accumarray(subs,1);
         end
         
         function save(obj)

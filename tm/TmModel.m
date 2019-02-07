@@ -10,7 +10,7 @@ classdef TmModel < handle
     end
     
     methods
-        function obj = TmModel(config,tm)
+        function obj = TmModel(config,tm,varargin)
             % Transport matrix model. Runs transport matrix simulation with
             % settings as specified in "config" and using transport matrix
             % contained in "tm".
@@ -152,7 +152,7 @@ classdef TmModel < handle
                error('Cannot run with multiple tms: n_iterations_per_tm not specified.')
            end
            n_iterations = obj.get_iterations(obj.config.run_time);
-           n_total_output = floor((n_iterations-1)/obj.config.output-interval)+1;
+           n_total_output = floor((n_iterations-1)/obj.config.output_interval)+1;
            % initialise matrices
            obj.time = nan(n_total_output,1);
            obj.time(1) = 0;
