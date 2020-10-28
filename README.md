@@ -181,7 +181,11 @@ simulation = TmModel(config,tm);
 The simulation result is saved to a .mat file in an "output/" folder. If a simulation with the requested model configuration already exists when calling TmModel, it is loaded from this .mat file instead of run again.
 
 ## Postprocessing and plotting
+Under "tm/tools/" the `AccumulationRegions` class applies some postprocessing to the transport matrix simulation results to determine the boundary of the simulated accumulation regions.
 
+Under "tm/plotting/" there are functions to: create an animation of the transport matrix simulation results, plot timeseries of the amount of simulated tracer contained in each of the accumulation regions, and to plot a map showing the simulated tracer concentrations at a requested time.
+
+Some examples of how to use these tools are shown in the "main.m" script.
 
 ## Drifter tools
-
+Under the "drifters/" folder, there are several tools available to analyse and plot the drifter data directly.
